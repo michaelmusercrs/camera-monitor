@@ -86,12 +86,14 @@ for d in [EVENTS_DIR, BASELINES_DIR, LOG_DIR, DATA_DIR]:
 # ══════════════════════════════════════════════════════════════
 # LOGGING
 # ══════════════════════════════════════════════════════════════
+from logging.handlers import RotatingFileHandler
+
 logger = logging.getLogger("camv2")
 logger.setLevel(logging.INFO)
 ch = logging.StreamHandler(sys.stdout)
 ch.setFormatter(logging.Formatter("%(asctime)s | %(levelname)-5s | %(message)s", datefmt="%H:%M:%S"))
 logger.addHandler(ch)
-fh = logging.FileHandler(LOG_DIR / "monitor.log", encoding="utf-8")
+fh = RotatingFileHandler(LOG_DIR / "monitor.log", maxBytes=5*1024*1024, backupCount=3, encoding="utf-8")
 fh.setFormatter(logging.Formatter("%(asctime)s | %(levelname)-5s | %(message)s"))
 logger.addHandler(fh)
 
@@ -197,16 +199,28 @@ def bytes_to_cv2(img_bytes):
     return cv2.imdecode(arr, cv2.IMREAD_GRAYSCALE)
 
 
+ANALYSIS_WIDTH = 320  # Downscale to this width for SSIM/diff (much faster)
+
+def _downscale(img, width=ANALYSIS_WIDTH):
+    """Downscale image for faster analysis. Returns downscaled image."""
+    h, w = img.shape[:2]
+    if w <= width:
+        return img
+    scale = width / w
+    return cv2.resize(img, (width, int(h * scale)), interpolation=cv2.INTER_AREA)
+
+
 def compute_ssim(img1_bytes, img2_bytes):
     """Compute structural similarity between two images. Returns 0.0-1.0."""
     g1 = bytes_to_cv2(img1_bytes)
     g2 = bytes_to_cv2(img2_bytes)
     if g1 is None or g2 is None:
         return 0.0
-    # Resize to same dimensions if needed
+    # Downscale for speed (6x faster on typical camera frames)
+    g1 = _downscale(g1)
+    g2 = _downscale(g2)
     if g1.shape != g2.shape:
         g2 = cv2.resize(g2, (g1.shape[1], g1.shape[0]))
-    # OpenCV SSIM via matchTemplate is fast but rough. Use manual SSIM.
     C1 = (0.01 * 255) ** 2
     C2 = (0.03 * 255) ** 2
     g1 = g1.astype(np.float64)
@@ -229,6 +243,8 @@ def compute_diff_pct(img1_bytes, img2_bytes, threshold=30):
     g2 = bytes_to_cv2(img2_bytes)
     if g1 is None or g2 is None:
         return 100.0
+    g1 = _downscale(g1)
+    g2 = _downscale(g2)
     if g1.shape != g2.shape:
         g2 = cv2.resize(g2, (g1.shape[1], g1.shape[0]))
     diff = cv2.absdiff(g1, g2)
@@ -237,12 +253,14 @@ def compute_diff_pct(img1_bytes, img2_bytes, threshold=30):
     return (changed / total) * 100.0
 
 
-def detect_contour_regions(img1_bytes, img2_bytes, min_area=500):
+def detect_contour_regions(img1_bytes, img2_bytes, min_area=200):
     """Find bounding boxes of changed regions between two frames."""
     g1 = bytes_to_cv2(img1_bytes)
     g2 = bytes_to_cv2(img2_bytes)
     if g1 is None or g2 is None:
         return []
+    g1 = _downscale(g1)
+    g2 = _downscale(g2)
     if g1.shape != g2.shape:
         g2 = cv2.resize(g2, (g1.shape[1], g1.shape[0]))
     diff = cv2.absdiff(g1, g2)
@@ -255,7 +273,7 @@ def detect_contour_regions(img1_bytes, img2_bytes, min_area=500):
         if area >= min_area:
             x, y, w, h = cv2.boundingRect(c)
             regions.append({"x": int(x), "y": int(y), "w": int(w), "h": int(h), "area": int(area)})
-    return sorted(regions, key=lambda r: r["area"], reverse=True)
+    return sorted(regions, key=lambda r: r["area"], reverse=True)[:10]  # Cap at 10 regions
 
 
 # ══════════════════════════════════════════════════════════════
@@ -328,6 +346,8 @@ class CameraState:
     last_scan_time: datetime = None
     motion_boost_until: datetime = None  # Scan faster until this time
     consecutive_none: int = 0       # Consecutive "NONE" results
+    consecutive_failures: int = 0   # Consecutive snapshot failures
+    offline_until: datetime = None  # Skip camera until this time after repeated failures
     total_captured: int = 0
     total_sent_to_ai: int = 0
     total_real_events: int = 0
@@ -372,9 +392,18 @@ class EventTracker:
             self.last_change_time = ts
 
     def save_pre_buffer(self, buffer_frames):
-        """Save the rolling buffer as pre-event frames."""
+        """Save the rolling buffer as pre-event frames with original timestamps."""
         for i, (ts, img_bytes) in enumerate(buffer_frames):
-            self.add_frame(img_bytes, is_pre_buffer=True)
+            filename = f"pre_{ts.strftime('%H%M%S')}_{i:02d}.jpg"
+            filepath = self.event_dir / filename
+            filepath.write_bytes(img_bytes)
+            self.frames.append({
+                "file": filename,
+                "time": ts.isoformat(),
+                "size": len(img_bytes),
+                "description": None,
+                "is_pre_buffer": True,
+            })
 
     def duration_seconds(self):
         return (datetime.now() - self.start_time).total_seconds()
@@ -549,28 +578,41 @@ class CameraMonitor:
         for eid, state in self.cam_states.items():
             if not state.profile.enabled:
                 continue
+            # Skip cameras in backoff
+            if state.offline_until and datetime.now() < state.offline_until:
+                continue
             img = grab_snapshot(eid)
             if img:
                 state.baseline_bytes = img
                 state.baseline_time = datetime.now()
+                if state.consecutive_failures >= 3:
+                    logger.info(f"  {state.profile.name}: BACK ONLINE")
                 state.consecutive_failures = 0
-                # Save to disk
+                state.offline_until = None
+                # Save to disk (keep only latest per camera)
                 ts = datetime.now().strftime("%Y%m%d_%H%M%S")
                 safe = eid.replace("camera.", "")
                 path = BASELINES_DIR / f"{safe}_{ts}.jpg"
                 path.write_bytes(img)
+                # Clean old baselines for this camera (keep last 2)
+                old = sorted(BASELINES_DIR.glob(f"{safe}_*.jpg"))
+                for old_f in old[:-2]:
+                    old_f.unlink(missing_ok=True)
                 logger.info(f"  Baseline: {state.profile.name} ({len(img):,} bytes)")
             else:
-                state.consecutive_failures = getattr(state, 'consecutive_failures', 0) + 1
-                if state.consecutive_failures <= 3:
-                    logger.warning(f"  Baseline FAILED: {state.profile.name} (attempt {state.consecutive_failures})")
-                elif state.consecutive_failures == 4:
-                    logger.warning(f"  {state.profile.name}: offline, will retry silently")
+                state.consecutive_failures += 1
+                if state.consecutive_failures <= 2:
+                    logger.warning(f"  Baseline FAILED: {state.profile.name}")
+                elif state.consecutive_failures == 3:
+                    state.offline_until = datetime.now() + timedelta(minutes=5)
+                    logger.warning(f"  {state.profile.name}: offline, backing off 5min")
 
     def fill_buffers(self):
         """Capture one frame per camera into rolling buffer."""
         for eid, state in self.cam_states.items():
             if not state.profile.enabled:
+                continue
+            if state.offline_until and datetime.now() < state.offline_until:
                 continue
             img = grab_snapshot(eid)
             if img:
@@ -584,16 +626,19 @@ class CameraMonitor:
         for eid, state in self.cam_states.items():
             if not state.profile.enabled or not state.profile.motion_entity:
                 continue
-            event_time = get_motion_event_time(state.profile.motion_entity)
+            # Skip offline cameras
+            if state.offline_until and datetime.now() < state.offline_until:
+                continue
+            try:
+                event_time = get_motion_event_time(state.profile.motion_entity)
+            except Exception:
+                continue
             if event_time and event_time != state.last_motion_time:
-                # New motion event
-                # Convert to naive datetime for comparison
                 if event_time.tzinfo:
                     event_time_naive = event_time.replace(tzinfo=None)
                 else:
                     event_time_naive = event_time
                 age = (datetime.now() - event_time_naive).total_seconds()
-                # Only react if event is recent (last 60 seconds) and not in the future
                 if 0 < age < 60:
                     triggered.append(eid)
                     logger.info(f"  MOTION: {state.profile.name} ({age:.0f}s ago)")
@@ -601,12 +646,15 @@ class CameraMonitor:
 
         # Check binary motion sensors
         for sensor_id, camera_ids in self.motion_sensors.items():
-            if get_binary_sensor_state(sensor_id):
-                for cid in camera_ids:
-                    if cid in self.cam_states and self.cam_states[cid].profile.enabled:
-                        if cid not in triggered:
-                            triggered.append(cid)
-                            logger.info(f"  MOTION SENSOR: {sensor_id} -> {self.cam_states[cid].profile.name}")
+            try:
+                if get_binary_sensor_state(sensor_id):
+                    for cid in camera_ids:
+                        if cid in self.cam_states and self.cam_states[cid].profile.enabled:
+                            if cid not in triggered:
+                                triggered.append(cid)
+                                logger.info(f"  MOTION SENSOR: {sensor_id} -> {self.cam_states[cid].profile.name}")
+            except Exception:
+                continue
 
         return triggered
 
@@ -615,20 +663,32 @@ class CameraMonitor:
         state = self.cam_states[eid]
         profile = state.profile
 
+        # Skip cameras in backoff period
+        if state.offline_until and datetime.now() < state.offline_until:
+            return None
+
         img = grab_snapshot(eid)
         if not img:
-            fails = getattr(state, 'consecutive_failures', 0) + 1
-            state.consecutive_failures = fails
-            if fails <= 2:
-                logger.warning(f"  {profile.name}: snapshot failed (attempt {fails})")
-            elif fails == 3:
-                logger.warning(f"  {profile.name}: offline - suppressing further warnings until it recovers")
+            state.consecutive_failures += 1
+            if state.consecutive_failures <= 2:
+                logger.warning(f"  {profile.name}: snapshot failed (attempt {state.consecutive_failures})")
+            elif state.consecutive_failures == 3:
+                # Backoff: skip this camera for 5 minutes
+                state.offline_until = datetime.now() + timedelta(minutes=5)
+                logger.warning(f"  {profile.name}: offline - backing off for 5min")
+            elif state.consecutive_failures % 60 == 0:
+                # Periodic check-in (every ~5min * 60 = 5h)
+                state.offline_until = datetime.now() + timedelta(minutes=5)
+                logger.info(f"  {profile.name}: still offline ({state.consecutive_failures} failures)")
+            else:
+                state.offline_until = datetime.now() + timedelta(minutes=5)
             return None
 
         # Camera recovered from failure
-        if getattr(state, 'consecutive_failures', 0) >= 3:
+        if state.consecutive_failures >= 3:
             logger.info(f"  {profile.name}: BACK ONLINE after {state.consecutive_failures} failures")
         state.consecutive_failures = 0
+        state.offline_until = None
 
         state.total_captured += 1
         img_size = len(img)
@@ -923,6 +983,9 @@ document.addEventListener('click',e=>{{if(!e.target.closest('img'))document.quer
                 # 2. Scan each camera based on its current interval
                 for eid, state in self.cam_states.items():
                     if not state.profile.enabled:
+                        continue
+                    # Skip cameras in offline backoff
+                    if state.offline_until and now < state.offline_until:
                         continue
 
                     # Determine scan interval for this camera right now
