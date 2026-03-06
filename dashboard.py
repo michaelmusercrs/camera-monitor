@@ -1026,10 +1026,6 @@ def main():
 
     server = ThreadingHTTPServer(("0.0.0.0", PORT), DashboardHandler)
 
-    # Open browser
-    import webbrowser
-    threading.Timer(1.5, lambda: webbrowser.open(f"http://localhost:{PORT}")).start()
-
     print(f"Dashboard running at http://localhost:{PORT}")
     print("Press Ctrl+C to stop")
 
