@@ -74,6 +74,7 @@ MOTION_POLL_INTERVAL = 2     # How often to check HA for motion events
 STABILIZE_SECONDS = 30       # Wait this long with no changes before closing an event
 EVENT_CAPTURE_INTERVAL = 5   # Seconds between captures during an active event
 BASELINE_INTERVAL = 3600     # Update baseline hourly
+EVENT_RETENTION_DAYS = 30    # Auto-delete events older than this
 
 # Filtering
 SIZE_JUMP_PCT = 25           # % change in file size = IR mode switch
@@ -164,8 +165,7 @@ def grab_snapshot(entity_id, timeout=15):
     """Get camera snapshot as raw JPEG bytes."""
     try:
         return ha_get(f"/api/camera_proxy/{entity_id}", timeout=timeout)
-    except Exception as e:
-        logger.warning(f"Snapshot failed for {entity_id}: {e}")
+    except Exception:
         return None
 
 
@@ -1027,6 +1027,10 @@ document.addEventListener('click',e=>{{if(!e.target.closest('img'))document.quer
                 if cycle % 150 == 0:
                     self._log_status()
 
+                # 6. Daily cleanup (every ~12 hours)
+                if cycle % 21600 == 0:
+                    self._cleanup_old_events()
+
                 time.sleep(MOTION_POLL_INTERVAL)
 
         except KeyboardInterrupt:
@@ -1037,6 +1041,20 @@ document.addEventListener('click',e=>{{if(!e.target.closest('img'))document.quer
             self.tuner.save()
             self._log_status()
             logger.info("Monitor stopped.")
+
+    def _cleanup_old_events(self):
+        """Remove event directories older than EVENT_RETENTION_DAYS."""
+        cutoff = datetime.now() - timedelta(days=EVENT_RETENTION_DAYS)
+        cutoff_str = cutoff.strftime("%Y%m%d")
+        removed = 0
+        if EVENTS_DIR.exists():
+            for edir in EVENTS_DIR.iterdir():
+                if edir.is_dir() and edir.name[:8] < cutoff_str:
+                    import shutil
+                    shutil.rmtree(edir, ignore_errors=True)
+                    removed += 1
+        if removed:
+            logger.info(f"  Cleaned up {removed} events older than {EVENT_RETENTION_DAYS} days")
 
     def _log_status(self):
         logger.info("\n--- STATUS ---")
