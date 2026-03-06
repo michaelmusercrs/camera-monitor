@@ -1,0 +1,20 @@
+# Environment / secrets
+.env
+
+# Python
+__pycache__/
+*.pyc
+
+# Runtime data
+baselines/
+events/
+logs/
+data/
+snapshots/
+
+# Generated reports
+*.html
+
+# OS
+.DS_Store
+Thumbs.db

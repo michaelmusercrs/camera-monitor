@@ -1,0 +1,124 @@
+{
+  "cameras": {
+    "camera.font_corner_camera": {
+      "name": "Font Corner Camera",
+      "group": "office",
+      "location": "Office front parking - hedge, sign pole, parking lot",
+      "enabled": true,
+      "ir_night_size_range": [33000, 39000],
+      "daylight_size_range": [43000, 57000],
+      "ir_to_day_hour": 7,
+      "day_to_ir_hour": 18,
+      "ssim_threshold": 0.88,
+      "night_ssim_threshold": 0.95,
+      "notes": "White Chevy Equinox usually parked on right. Dark SUV appears during business hours upper-left."
+    },
+    "camera.security_camera_5": {
+      "name": "Security Camera 5",
+      "group": "office",
+      "location": "Shop side lot - metal building, gravel parking, loading area",
+      "enabled": true,
+      "ir_night_size_range": [22000, 28000],
+      "daylight_size_range": [44000, 54000],
+      "ir_to_day_hour": 6,
+      "day_to_ir_hour": 18,
+      "ssim_threshold": 0.85,
+      "night_ssim_threshold": 0.95,
+      "notes": "Vehicles occasionally park here during work hours. Gold/tan truck observed Day 1."
+    },
+    "camera.muse_office": {
+      "name": "Muse Office",
+      "group": "office",
+      "location": "Indoor office - desks, chairs, couch, printer",
+      "enabled": true,
+      "ir_night_size_range": [22000, 26000],
+      "daylight_size_range": [27000, 37000],
+      "ir_to_day_hour": 9,
+      "day_to_ir_hour": 17,
+      "ssim_threshold": 0.90,
+      "night_ssim_threshold": 0.97,
+      "notes": "People work here ~10am-5pm. Tuya camera has built-in motion detection green boxes. Most valuable camera for real activity."
+    },
+    "camera.barn": {
+      "name": "Barn",
+      "group": "home",
+      "location": "Workshop/garage - tools, workbench, chairs, equipment",
+      "enabled": true,
+      "ir_night_size_range": [28000, 34000],
+      "daylight_size_range": [35000, 51000],
+      "ir_to_day_hour": 11,
+      "day_to_ir_hour": 23,
+      "ssim_threshold": 0.82,
+      "night_ssim_threshold": 0.94,
+      "notes": "Very noisy - 213 events in old data with minimal real changes. Lights on/off is the main real event. High threshold needed."
+    },
+    "camera.back_camera": {
+      "name": "Back Camera",
+      "group": "office",
+      "location": "Back of office building - may need re-aiming",
+      "enabled": true,
+      "ir_night_size_range": [9200, 9600],
+      "daylight_size_range": [9200, 13000],
+      "ir_to_day_hour": 7,
+      "day_to_ir_hour": 17,
+      "ssim_threshold": 0.96,
+      "night_ssim_threshold": 0.98,
+      "notes": "Was aimed at wall in Feb, may have been fixed. High threshold - only alert on big changes. Re-enable to check."
+    },
+    "camera.front_camera": {
+      "name": "Front Camera",
+      "group": "home",
+      "location": "Front of property - currently offline",
+      "enabled": true,
+      "ir_night_size_range": [20000, 40000],
+      "daylight_size_range": [40000, 60000],
+      "ir_to_day_hour": 7,
+      "day_to_ir_hour": 18,
+      "ssim_threshold": 0.88,
+      "night_ssim_threshold": 0.95,
+      "notes": "Was unavailable in Feb. Possibly Wyze. Will auto-detect if it comes online."
+    },
+    "camera.front_motion_camera": {
+      "name": "Front Motion Camera",
+      "group": "home",
+      "location": "Front yard motion camera - currently offline",
+      "enabled": true,
+      "ir_night_size_range": [20000, 40000],
+      "daylight_size_range": [40000, 60000],
+      "ir_to_day_hour": 7,
+      "day_to_ir_hour": 18,
+      "ssim_threshold": 0.88,
+      "night_ssim_threshold": 0.95,
+      "notes": "Was unavailable in Feb. Possibly Wyze. Will auto-detect if it comes online."
+    },
+    "camera.front_doorbell": {
+      "name": "Front Doorbell",
+      "group": "home",
+      "location": "Front door doorbell camera - currently offline",
+      "enabled": true,
+      "ir_night_size_range": [20000, 40000],
+      "daylight_size_range": [40000, 60000],
+      "ir_to_day_hour": 7,
+      "day_to_ir_hour": 18,
+      "ssim_threshold": 0.88,
+      "night_ssim_threshold": 0.95,
+      "notes": "Wyze doorbell. Was unavailable in Feb. Will auto-detect if it comes online."
+    }
+  },
+  "ha_motion_entities": {
+    "camera.font_corner_camera": "event.font_corner_camera_doorbell_message",
+    "camera.back_camera": "event.back_camera_doorbell_message",
+    "camera.security_camera_5": "event.security_camera_5_doorbell_message",
+    "camera.muse_office": "event.muse_office_doorbell_message",
+    "camera.front_camera": "event.front_camera_doorbell_message",
+    "camera.front_motion_camera": "event.front_motion_camera_doorbell_message",
+    "camera.front_doorbell": null,
+    "camera.barn": null
+  },
+  "ha_motion_sensors": {
+    "binary_sensor.driveway_shop_motion": ["camera.security_camera_5", "camera.barn"],
+    "binary_sensor.driveway_west_motion": ["camera.font_corner_camera"]
+  },
+  "learned_from": "695 events over 48h (Feb 11-13 2026) + camera audit Mar 5",
+  "version": 3
+}
